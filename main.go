@@ -10,131 +10,109 @@ import (
 	"time"
 )
 
-// Função para desenhar barra proporcional ao valor, com largura máxima
-func drawBar(value, max float64, maxWidth int) string {
-	if max == 0 {
-		return ""
-	}
-	length := int((value / max) * float64(maxWidth))
-	if length < 0 {
-		length = 0
-	}
-	bar := strings.Repeat("█", length)
-	return bar
+type Inputs struct {
+	IdadeAtual       int
+	CapitalInicial   float64
+	InflacaoMensal   float64
+	RendimentoMensal float64
+	AporteMensal     float64
+	RendaDesejada    float64
+	ExpectativaVida  int
+}
+
+type Ponto struct {
+	Mes        int
+	Patrimonio float64
+	Meta       float64
 }
 
 func main() {
+	inputs := getUserInputs()
+	historico, mesesTrabalhados := simularAposentadoriaAnual(inputs)
+	exibirResultado(inputs, mesesTrabalhados)
+	exibirGraficoAnual(historico)
+}
+
+func getUserInputs() Inputs {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Valores padrão
-	defaultIdadeAtual := 35
-	defaultCapitalInicial := 140000.0
-	defaultInflacaoMensal := 0.3
-	defaultRendimentoMensal := 0.6
-	defaultAporteMensal := 1000.0
-	defaultRendaDesejada := 1000.0
-	defaultExpectativaVida := 87
+	defaults := map[string]string{
+		"Idade atual (anos)":                                             "35",
+		"Capital inicial disponível hoje em reais":                       "140000.00",
+		"Inflação mensal em % (quanto os preços sobem por mês)":          "0.3",
+		"Rendimento mensal em % (quanto o capital cresce por mês)":       "0.6",
+		"Aporte mensal (quanto você consegue investir por mês) em reais": "1000.00",
+		"Renda mensal desejada na aposentadoria (em valores de hoje)":    "1000.00",
+		"Expectativa de vida (anos)":                                     "87",
+	}
 
-	// Função para ler entrada com valor padrão
-	readWithDefault := func(prompt string, defaultValue string) string {
-		fmt.Print(prompt)
+	readWithDefault := func(prompt, def string) string {
+		fmt.Printf("%s [padrão: %s]: ", prompt, def)
 		text, _ := reader.ReadString('\n')
 		text = strings.TrimSpace(text)
 		if text == "" {
-			return defaultValue
+			return def
 		}
 		return text
 	}
 
-	// Coleta de dados com explicações
-	idadeAtualStr := readWithDefault(
-		fmt.Sprintf("Idade atual (anos) [padrão: %d]: ", defaultIdadeAtual),
-		fmt.Sprintf("%d", defaultIdadeAtual))
-	idadeAtual, _ := strconv.Atoi(idadeAtualStr)
+	toInt := func(s string) int {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			fmt.Printf("Entrada inválida, usando valor padrão %s\n", s)
+			return 0
+		}
+		return v
+	}
 
-	capitalInicialStr := readWithDefault(
-		fmt.Sprintf("Capital inicial disponível hoje em reais [padrão: %.2f]: ", defaultCapitalInicial),
-		fmt.Sprintf("%.2f", defaultCapitalInicial))
-	capitalInicial, _ := strconv.ParseFloat(capitalInicialStr, 64)
+	toFloat := func(s string) float64 {
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			fmt.Printf("Entrada inválida, usando valor padrão %s\n", s)
+			return 0
+		}
+		return v
+	}
 
-	inflacaoMensalStr := readWithDefault(
-		fmt.Sprintf("Inflação mensal em %% (quanto os preços sobem por mês) [padrão: %.2f]: ", defaultInflacaoMensal),
-		fmt.Sprintf("%.2f", defaultInflacaoMensal))
-	inflacaoMensal, _ := strconv.ParseFloat(inflacaoMensalStr, 64)
-
-	rendimentoMensalStr := readWithDefault(
-		fmt.Sprintf("Rendimento mensal em %% (quanto o capital cresce por mês) [padrão: %.2f]: ", defaultRendimentoMensal),
-		fmt.Sprintf("%.2f", defaultRendimentoMensal))
-	rendimentoMensal, _ := strconv.ParseFloat(rendimentoMensalStr, 64)
-
-	aporteMensalStr := readWithDefault(
-		fmt.Sprintf("Aporte mensal (quanto você consegue investir por mês) em reais [padrão: %.2f]: ", defaultAporteMensal),
-		fmt.Sprintf("%.2f", defaultAporteMensal))
-	aporteMensal, _ := strconv.ParseFloat(aporteMensalStr, 64)
-
-	rendaDesejadaStr := readWithDefault(
-		fmt.Sprintf("Renda mensal desejada na aposentadoria (em valores de hoje) [padrão: %.2f]: ", defaultRendaDesejada),
-		fmt.Sprintf("%.2f", defaultRendaDesejada))
-	rendaDesejada, _ := strconv.ParseFloat(rendaDesejadaStr, 64)
-
-	expectativaVidaStr := readWithDefault(
-		fmt.Sprintf("Expectativa de vida (anos) [padrão: %d]: ", defaultExpectativaVida),
-		fmt.Sprintf("%d", defaultExpectativaVida))
-	expectativaVida, _ := strconv.Atoi(expectativaVidaStr)
+	idadeAtual := toInt(readWithDefault("Idade atual (anos)", defaults["Idade atual (anos)"]))
+	capitalInicial := toFloat(readWithDefault("Capital inicial disponível hoje em reais", defaults["Capital inicial disponível hoje em reais"]))
+	inflacaoMensal := toFloat(readWithDefault("Inflação mensal em % (quanto os preços sobem por mês)", defaults["Inflação mensal em % (quanto os preços sobem por mês)"]))
+	rendimentoMensal := toFloat(readWithDefault("Rendimento mensal em % (quanto o capital cresce por mês)", defaults["Rendimento mensal em % (quanto o capital cresce por mês)"]))
+	aporteMensal := toFloat(readWithDefault("Aporte mensal (quanto você consegue investir por mês) em reais", defaults["Aporte mensal (quanto você consegue investir por mês) em reais"]))
+	rendaDesejada := toFloat(readWithDefault("Renda mensal desejada na aposentadoria (em valores de hoje)", defaults["Renda mensal desejada na aposentadoria (em valores de hoje)"]))
+	expectativaVida := toInt(readWithDefault("Expectativa de vida (anos)", defaults["Expectativa de vida (anos)"]))
 
 	// Converte percentuais para decimais
 	inflacaoMensal /= 100
 	rendimentoMensal /= 100
 
-	// Simulação mês a mês em valores NOMINAIS
+	return Inputs{
+		IdadeAtual:       idadeAtual,
+		CapitalInicial:   capitalInicial,
+		InflacaoMensal:   inflacaoMensal,
+		RendimentoMensal: rendimentoMensal,
+		AporteMensal:     aporteMensal,
+		RendaDesejada:    rendaDesejada,
+		ExpectativaVida:  expectativaVida,
+	}
+}
+
+func calcularPatrimonioNecessario(rendaInicial float64, mesesRestantes int, rendimentoMensal float64, inflacaoMensal float64) float64 {
+	patrimonioNecessario := 0.0
+	saque := rendaInicial
+	for m := 0; m < mesesRestantes; m++ {
+		patrimonioNecessario += saque / math.Pow(1+rendimentoMensal, float64(m+1))
+		saque *= (1 + inflacaoMensal)
+	}
+	return patrimonioNecessario
+}
+
+func exibirResultado(inputs Inputs, mesesTrabalhados int) {
 	hoje := time.Now()
-	patrimonio := capitalInicial
-	mesesTrabalhados := 0
-	aporteAtual := aporteMensal
-
-	// Armazena histórico para gráfico
-	type ponto struct {
-		mes        int
-		patrimonio float64
-		meta       float64
-	}
-	var historico []ponto
-
-	for {
-		idade := idadeAtual + mesesTrabalhados/12
-		mesesRestantesVida := (expectativaVida - idade) * 12
-
-		rendaInicialAposentadoria := rendaDesejada * math.Pow(1+inflacaoMensal, float64(mesesTrabalhados))
-
-		// Calcula patrimônio necessário para saques crescentes pela inflação
-		patrimonioNecessario := 0.0
-		saque := rendaInicialAposentadoria
-		for m := 0; m < mesesRestantesVida; m++ {
-			patrimonioNecessario += saque / math.Pow(1+rendimentoMensal, float64(m+1))
-			saque *= (1 + inflacaoMensal)
-		}
-
-		historico = append(historico, ponto{
-			mes:        mesesTrabalhados,
-			patrimonio: patrimonio,
-			meta:       patrimonioNecessario,
-		})
-
-		if patrimonio >= patrimonioNecessario {
-			break
-		}
-
-		patrimonio *= (1 + rendimentoMensal)
-		patrimonio += aporteAtual
-		aporteAtual *= (1 + inflacaoMensal)
-
-		mesesTrabalhados++
-	}
-
-	// Resultado final
 	dataAposentadoria := hoje.AddDate(0, mesesTrabalhados, 0)
-	idadeAposentadoria := idadeAtual + mesesTrabalhados/12
-	rendaInicialAposentadoria := rendaDesejada * math.Pow(1+inflacaoMensal, float64(mesesTrabalhados))
+	idadeAposentadoria := inputs.IdadeAtual + mesesTrabalhados/12
+	rendaInicialAposentadoria := inputs.RendaDesejada * math.Pow(1+inputs.InflacaoMensal, float64(mesesTrabalhados))
 
 	fmt.Println("\n========= RESULTADO =========")
 	fmt.Printf("Meses até a aposentadoria: %d\n", mesesTrabalhados)
@@ -143,31 +121,75 @@ func main() {
 	fmt.Printf("Idade na aposentadoria: %d anos\n", idadeAposentadoria)
 	fmt.Printf("Renda inicial na aposentadoria (corrigida pela inflação): R$ %.2f\n", rendaInicialAposentadoria)
 	fmt.Println("=============================")
+}
 
-	// --- Gráfico ASCII de barras comparativas ---
+func drawBar(value, max float64, maxWidth int) string {
+	if max == 0 {
+		return ""
+	}
+	length := int((value / max) * float64(maxWidth))
+	if length < 0 {
+		length = 0
+	}
+	return strings.Repeat("█", length)
+}
 
-	maxWidth := 40
-	var maxValor float64
-	for _, p := range historico {
-		if p.patrimonio > maxValor {
-			maxValor = p.patrimonio
+func simularAposentadoriaAnual(inputs Inputs) ([]Ponto, int) {
+	patrimonio := inputs.CapitalInicial
+	mesesTrabalhados := 0
+	aporteAtual := inputs.AporteMensal
+	historico := make([]Ponto, 0)
+
+	for {
+		idade := inputs.IdadeAtual + mesesTrabalhados/12
+		mesesRestantesVida := (inputs.ExpectativaVida - idade) * 12
+
+		rendaInicialAposentadoria := inputs.RendaDesejada * math.Pow(1+inputs.InflacaoMensal, float64(mesesTrabalhados))
+
+		patrimonioNecessario := calcularPatrimonioNecessario(
+			rendaInicialAposentadoria,
+			mesesRestantesVida,
+			inputs.RendimentoMensal,
+			inputs.InflacaoMensal,
+		)
+
+		// Armazena histórico só a cada 12 meses (1 ano)
+		if mesesTrabalhados%12 == 0 {
+			historico = append(historico, Ponto{
+				Mes:        mesesTrabalhados / 12, // aqui Mes vira Ano
+				Patrimonio: patrimonio,
+				Meta:       patrimonioNecessario, // mantemos para referência, pode ser ignorado no gráfico
+			})
 		}
-		if p.meta > maxValor {
-			maxValor = p.meta
+
+		if patrimonio >= patrimonioNecessario {
+			break
+		}
+
+		patrimonio = patrimonio*(1+inputs.RendimentoMensal) + aporteAtual
+		aporteAtual *= (1 + inputs.InflacaoMensal)
+		mesesTrabalhados++
+	}
+
+	return historico, mesesTrabalhados
+}
+
+func exibirGraficoAnual(historico []Ponto) {
+	maxWidth := 40
+	maxValor := 0.0
+
+	for _, p := range historico {
+		if p.Patrimonio > maxValor {
+			maxValor = p.Patrimonio
 		}
 	}
 
-	fmt.Println("\nEvolução do Patrimônio vs Meta (cada barra ~ proporcional ao valor):")
+	fmt.Println("\nEvolução anual do Patrimônio (cada barra ~ proporcional ao valor):")
 	for _, p := range historico {
-		barPat := drawBar(p.patrimonio, maxValor, maxWidth)
-		barMeta := drawBar(p.meta, maxValor, maxWidth)
+		barPat := drawBar(p.Patrimonio, maxValor, maxWidth)
 
-		fmt.Printf("Mês %3d: Patrimônio %-*s  Meta %-*s\n",
-			p.mes,
-			maxWidth, barPat,
-			maxWidth, barMeta)
-		if p.mes%12 == 0 && p.mes != 0 {
-			fmt.Println()
-		}
+		fmt.Printf("Ano %3d: Patrimônio %-*s\n",
+			p.Mes, // aqui Mes é Ano
+			maxWidth, barPat)
 	}
 }
