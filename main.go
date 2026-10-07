@@ -3,12 +3,16 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// Limite superior aceito para a expectativa de vida (anos).
+const maxExpectativaVida = 130
 
 type Inputs struct {
 	IdadeAtual       int
@@ -21,34 +25,61 @@ type Inputs struct {
 }
 
 type Ponto struct {
-	Mes        int
+	Mes        int // meses a partir de hoje
 	Patrimonio float64
 	Meta       float64
 }
 
+type Resultado struct {
+	Historico        []Ponto
+	MesesTrabalhados int  // só tem significado quando Atingiu é true
+	Atingiu          bool // false: a meta não é alcançada antes da expectativa de vida
+}
+
 func main() {
 	inputs := getUserInputs()
-	historico, mesesTrabalhados := simularAposentadoriaAnual(inputs)
-	exibirResultado(inputs, mesesTrabalhados)
-	exibirGraficoAnual(historico)
+	if err := inputs.Validar(); err != nil {
+		fmt.Fprintln(os.Stderr, "Erro:", err)
+		os.Exit(1)
+	}
+
+	resultado := simularAposentadoria(inputs)
+	exibirResultado(inputs, resultado)
+	exibirLimitacoes(os.Stdout)
+	exibirGraficoAnual(resultado.Historico)
+}
+
+func (in Inputs) Validar() error {
+	switch {
+	case in.IdadeAtual < 0:
+		return fmt.Errorf("a idade atual não pode ser negativa")
+	case in.ExpectativaVida > maxExpectativaVida:
+		return fmt.Errorf("a expectativa de vida deve ser de no máximo %d anos", maxExpectativaVida)
+	case in.IdadeAtual >= in.ExpectativaVida:
+		return fmt.Errorf("a idade atual (%d) deve ser menor que a expectativa de vida (%d)", in.IdadeAtual, in.ExpectativaVida)
+	case in.CapitalInicial < 0:
+		return fmt.Errorf("o capital inicial não pode ser negativo")
+	case in.AporteMensal < 0:
+		return fmt.Errorf("o aporte mensal não pode ser negativo")
+	case in.RendaDesejada <= 0:
+		return fmt.Errorf("a renda mensal desejada deve ser maior que zero")
+	case in.InflacaoMensal <= -1:
+		return fmt.Errorf("a inflação mensal deve ser maior que -100%%")
+	case in.RendimentoMensal <= -1:
+		return fmt.Errorf("o rendimento mensal deve ser maior que -100%%")
+	}
+	return nil
 }
 
 func getUserInputs() Inputs {
-	reader := bufio.NewReader(os.Stdin)
+	return lerInputs(os.Stdin, os.Stdout)
+}
 
-	// Valores padrão
-	defaults := map[string]string{
-		"Idade atual (anos)":                                             "35",
-		"Capital inicial disponível hoje em reais":                       "140000.00",
-		"Inflação mensal em % (quanto os preços sobem por mês)":          "0.3",
-		"Rendimento mensal em % (quanto o capital cresce por mês)":       "0.6",
-		"Aporte mensal (quanto você consegue investir por mês) em reais": "1000.00",
-		"Renda mensal desejada na aposentadoria (em valores de hoje)":    "1000.00",
-		"Expectativa de vida (anos)":                                     "87",
-	}
+func lerInputs(r io.Reader, w io.Writer) Inputs {
+	reader := bufio.NewReader(r)
 
 	readWithDefault := func(prompt, def string) string {
-		fmt.Printf("%s [padrão: %s]: ", prompt, def)
+		fmt.Fprintf(w, "%s [padrão: %s]: ", prompt, def)
 		text, _ := reader.ReadString('\n')
 		text = strings.TrimSpace(text)
 		if text == "" {
@@ -57,31 +88,33 @@ func getUserInputs() Inputs {
 		return text
 	}
 
-	toInt := func(s string) int {
+	toInt := func(prompt, def string) int {
+		s := readWithDefault(prompt, def)
 		v, err := strconv.Atoi(s)
 		if err != nil {
-			fmt.Printf("Entrada inválida, usando valor padrão %s\n", s)
-			return 0
+			fmt.Fprintf(w, "Entrada inválida %q, usando valor padrão %s\n", s, def)
+			v, _ = strconv.Atoi(def)
 		}
 		return v
 	}
 
-	toFloat := func(s string) float64 {
-		v, err := strconv.ParseFloat(s, 64)
+	toFloat := func(prompt, def string) float64 {
+		s := readWithDefault(prompt, def)
+		v, err := parseFloat(s)
 		if err != nil {
-			fmt.Printf("Entrada inválida, usando valor padrão %s\n", s)
-			return 0
+			fmt.Fprintf(w, "Entrada inválida %q, usando valor padrão %s\n", s, def)
+			v, _ = parseFloat(def)
 		}
 		return v
 	}
 
-	idadeAtual := toInt(readWithDefault("Idade atual (anos)", defaults["Idade atual (anos)"]))
-	capitalInicial := toFloat(readWithDefault("Capital inicial disponível hoje em reais", defaults["Capital inicial disponível hoje em reais"]))
-	inflacaoMensal := toFloat(readWithDefault("Inflação mensal em % (quanto os preços sobem por mês)", defaults["Inflação mensal em % (quanto os preços sobem por mês)"]))
-	rendimentoMensal := toFloat(readWithDefault("Rendimento mensal em % (quanto o capital cresce por mês)", defaults["Rendimento mensal em % (quanto o capital cresce por mês)"]))
-	aporteMensal := toFloat(readWithDefault("Aporte mensal (quanto você consegue investir por mês) em reais", defaults["Aporte mensal (quanto você consegue investir por mês) em reais"]))
-	rendaDesejada := toFloat(readWithDefault("Renda mensal desejada na aposentadoria (em valores de hoje)", defaults["Renda mensal desejada na aposentadoria (em valores de hoje)"]))
-	expectativaVida := toInt(readWithDefault("Expectativa de vida (anos)", defaults["Expectativa de vida (anos)"]))
+	idadeAtual := toInt("Idade atual (anos)", "35")
+	capitalInicial := toFloat("Capital inicial disponível hoje em reais", "140000.00")
+	inflacaoMensal := toFloat("Inflação mensal em % (quanto os preços sobem por mês)", "0.3")
+	rendimentoMensal := toFloat("Rendimento mensal em % (quanto o capital cresce por mês)", "0.6")
+	aporteMensal := toFloat("Aporte mensal (quanto você consegue investir por mês) em reais", "1000.00")
+	rendaDesejada := toFloat("Renda mensal desejada na aposentadoria (em valores de hoje)", "1000.00")
+	expectativaVida := toInt("Expectativa de vida (anos)", "87")
 
 	// Converte percentuais para decimais
 	inflacaoMensal /= 100
@@ -98,23 +131,64 @@ func getUserInputs() Inputs {
 	}
 }
 
+// parseFloat aceita vírgula ou ponto como separador decimal. Quando há vírgula,
+// os pontos são tratados como separador de milhar ("1.000,50" -> 1000.50).
+func parseFloat(s string) (float64, error) {
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, ",") {
+		s = strings.ReplaceAll(s, ".", "")
+		s = strings.ReplaceAll(s, ",", ".")
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("valor inválido: %s", s)
+	}
+	return v, nil
+}
+
+// calcularPatrimonioNecessario devolve o valor presente de mesesRestantes saques
+// mensais feitos no início de cada mês: o primeiro de rendaInicial, na data da
+// aposentadoria, e os seguintes corrigidos pela inflação e descontados pelo rendimento.
 func calcularPatrimonioNecessario(rendaInicial float64, mesesRestantes int, rendimentoMensal float64, inflacaoMensal float64) float64 {
+	razao := (1 + inflacaoMensal) / (1 + rendimentoMensal)
 	patrimonioNecessario := 0.0
-	saque := rendaInicial
+	fator := 1.0
 	for m := 0; m < mesesRestantes; m++ {
-		patrimonioNecessario += saque / math.Pow(1+rendimentoMensal, float64(m+1))
-		saque *= (1 + inflacaoMensal)
+		patrimonioNecessario += rendaInicial * fator
+		fator *= razao
 	}
 	return patrimonioNecessario
 }
 
-func exibirResultado(inputs Inputs, mesesTrabalhados int) {
-	hoje := time.Now()
-	dataAposentadoria := hoje.AddDate(0, mesesTrabalhados, 0)
+// adicionarMeses soma meses a t limitando o dia ao último dia do mês de destino
+// (31/01 + 1 mês = 28/02, e não 03/03).
+func adicionarMeses(t time.Time, meses int) time.Time {
+	ano, mes, dia := t.Date()
+	primeiroDoMes := time.Date(ano, mes+time.Month(meses), 1, 0, 0, 0, 0, t.Location())
+	if ultimo := primeiroDoMes.AddDate(0, 1, -1).Day(); dia > ultimo {
+		dia = ultimo
+	}
+	return time.Date(primeiroDoMes.Year(), primeiroDoMes.Month(), dia, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+}
+
+func exibirResultado(inputs Inputs, resultado Resultado) {
+	fmt.Println("\n========= RESULTADO =========")
+	if !resultado.Atingiu {
+		fmt.Printf("Meta não atingida: com os dados informados o patrimônio não sustenta a renda\n")
+		fmt.Printf("desejada em nenhum momento antes dos %d anos (expectativa de vida).\n", inputs.ExpectativaVida)
+		fmt.Println("Tente aumentar o aporte, o capital inicial ou o rendimento, ou reduzir a renda desejada.")
+		fmt.Println("=============================")
+		return
+	}
+
+	mesesTrabalhados := resultado.MesesTrabalhados
+	dataAposentadoria := adicionarMeses(time.Now(), mesesTrabalhados)
 	idadeAposentadoria := inputs.IdadeAtual + mesesTrabalhados/12
 	rendaInicialAposentadoria := inputs.RendaDesejada * math.Pow(1+inputs.InflacaoMensal, float64(mesesTrabalhados))
 
-	fmt.Println("\n========= RESULTADO =========")
 	fmt.Printf("Meses até a aposentadoria: %d\n", mesesTrabalhados)
 	fmt.Printf("Anos até a aposentadoria: %.1f\n", float64(mesesTrabalhados)/12)
 	fmt.Printf("Data estimada da aposentadoria: %s\n", dataAposentadoria.Format("02/01/2006"))
@@ -123,55 +197,78 @@ func exibirResultado(inputs Inputs, mesesTrabalhados int) {
 	fmt.Println("=============================")
 }
 
-func drawBar(value, max float64, maxWidth int) string {
-	if max == 0 {
+// exibirLimitacoes lista as premissas e limitações do modelo.
+func exibirLimitacoes(w io.Writer) {
+	linhas := []string{
+		"",
+		"--- Limitações deste cálculo ---",
+		"- Patrimônio consumido: os saques esgotam o patrimônio exatamente na expectativa de",
+		"  vida. Não há perpetuidade: o principal é gasto e nada sobra no final.",
+		"- Sem margem de segurança: a aposentadoria é declarada no primeiro mês em que o",
+		"  patrimônio iguala a meta. Se você viver mais ou o rendimento ficar abaixo do",
+		"  informado, o dinheiro não dura.",
+		"- Taxas constantes: rendimento e inflação são fixos todos os meses, sem oscilação de",
+		"  mercado. O prazo é muito sensível ao rendimento real, (1+rendimento)/(1+inflação)-1;",
+		"  vale testar valores mais conservadores.",
+		"- Sem impostos e taxas: não há IR sobre rendimentos nem taxa de administração.",
+		"- Sem outras rendas: INSS, previdência privada e aluguéis não são considerados.",
+		"- Convenções de tempo: saques no início do mês; aportes no fim do mês (o primeiro sem",
+		"  correção pela inflação); a idade atual é tratada como completa hoje.",
+		"- Taxas devem ser mensais e nominais (não reais). Converta taxas anuais antes de digitar.",
+	}
+	for _, l := range linhas {
+		fmt.Fprintln(w, l)
+	}
+}
+
+func drawBar(value, maximo float64, maxWidth int) string {
+	if maximo <= 0 {
 		return ""
 	}
-	length := int((value / max) * float64(maxWidth))
-	if length < 0 {
-		length = 0
-	}
+	length := int((value / maximo) * float64(maxWidth))
+	length = max(0, min(length, maxWidth))
 	return strings.Repeat("█", length)
 }
 
-func simularAposentadoriaAnual(inputs Inputs) ([]Ponto, int) {
+// simularAposentadoria avança mês a mês até que o patrimônio acumulado cubra a
+// meta (patrimônio necessário para sustentar a renda desejada até a expectativa
+// de vida). O horizonte de vida é contado em meses exatos, e a simulação termina
+// no máximo na expectativa de vida, mesmo que a meta nunca seja atingida.
+func simularAposentadoria(inputs Inputs) Resultado {
+	totalMeses := (inputs.ExpectativaVida - inputs.IdadeAtual) * 12
 	patrimonio := inputs.CapitalInicial
-	mesesTrabalhados := 0
 	aporteAtual := inputs.AporteMensal
+	rendaAtual := inputs.RendaDesejada
 	historico := make([]Ponto, 0)
 
-	for {
-		idade := inputs.IdadeAtual + mesesTrabalhados/12
-		mesesRestantesVida := (inputs.ExpectativaVida - idade) * 12
-
-		rendaInicialAposentadoria := inputs.RendaDesejada * math.Pow(1+inputs.InflacaoMensal, float64(mesesTrabalhados))
-
+	for mes := 0; mes < totalMeses; mes++ {
 		patrimonioNecessario := calcularPatrimonioNecessario(
-			rendaInicialAposentadoria,
-			mesesRestantesVida,
+			rendaAtual,
+			totalMeses-mes,
 			inputs.RendimentoMensal,
 			inputs.InflacaoMensal,
 		)
+		atingiu := patrimonio >= patrimonioNecessario
 
-		// Armazena histórico só a cada 12 meses (1 ano)
-		if mesesTrabalhados%12 == 0 {
+		// Histórico a cada 12 meses, mais o último mês simulado
+		if mes%12 == 0 || atingiu || mes == totalMeses-1 {
 			historico = append(historico, Ponto{
-				Mes:        mesesTrabalhados / 12, // aqui Mes vira Ano
+				Mes:        mes,
 				Patrimonio: patrimonio,
-				Meta:       patrimonioNecessario, // mantemos para referência, pode ser ignorado no gráfico
+				Meta:       patrimonioNecessario,
 			})
 		}
 
-		if patrimonio >= patrimonioNecessario {
-			break
+		if atingiu {
+			return Resultado{Historico: historico, MesesTrabalhados: mes, Atingiu: true}
 		}
 
 		patrimonio = patrimonio*(1+inputs.RendimentoMensal) + aporteAtual
 		aporteAtual *= (1 + inputs.InflacaoMensal)
-		mesesTrabalhados++
+		rendaAtual *= (1 + inputs.InflacaoMensal)
 	}
 
-	return historico, mesesTrabalhados
+	return Resultado{Historico: historico}
 }
 
 func exibirGraficoAnual(historico []Ponto) {
@@ -179,17 +276,14 @@ func exibirGraficoAnual(historico []Ponto) {
 	maxValor := 0.0
 
 	for _, p := range historico {
-		if p.Patrimonio > maxValor {
-			maxValor = p.Patrimonio
-		}
+		maxValor = max(maxValor, p.Patrimonio, p.Meta)
 	}
 
-	fmt.Println("\nEvolução anual do Patrimônio (cada barra ~ proporcional ao valor):")
+	fmt.Println("\nEvolução do Patrimônio e da Meta (barras proporcionais ao valor):")
 	for _, p := range historico {
-		barPat := drawBar(p.Patrimonio, maxValor, maxWidth)
-
-		fmt.Printf("Ano %3d: Patrimônio %-*s\n",
-			p.Mes, // aqui Mes é Ano
-			maxWidth, barPat)
+		fmt.Printf("Ano %5.1f: Patrimônio %-*s R$ %12.2f\n",
+			float64(p.Mes)/12, maxWidth, drawBar(p.Patrimonio, maxValor, maxWidth), p.Patrimonio)
+		fmt.Printf("           Meta       %-*s R$ %12.2f\n",
+			maxWidth, drawBar(p.Meta, maxValor, maxWidth), p.Meta)
 	}
 }
